@@ -1,31 +1,35 @@
 const express = require("express");
 const router = new express.Router();
+const nodemailer = require("nodemailer");
 const authMiddleware = require("../middleware/auth")
+const User = require("../model/userModel")
 const Task = require("../model/taskModel");
+
 
 //create tasks
 router.post("/tasks", authMiddleware,async (req, res) => {
+  try{
+    const task = new Task({
 
-    try{
+      ...req.body,
+      createdBy:req.user._id
+    })
 
-        const task = new Task({
-            ...req.body,
-            createdBy:req.user._id
-          })
+    task
+    .save()
+    .then(() => {
 
-        task
-        .save()
-        .then(() => {
-          res.status(201).send(task);
-        })
-        .catch((error) => {
-          res.status(400).send(error);
-        });
-    }catch(error){
-        res.status(400).send({error:"Couldn't create task. Please try again later"});
-    }
+      //notification to the assigned user
+      sendMail(task.assignedTo,"assigned",task.dueDate)
 
-
+      res.status(201).send(task);
+    })
+    .catch((error) => {
+      res.status(400).send(error);
+    });
+  }catch(error){
+      res.status(400).send({error:"Couldn't create task. Please try again later"});
+  }
 });
 
 //get all tasks created by current user
@@ -60,6 +64,8 @@ router.get("/tasks/assigned",authMiddleware, async (req, res) => {
 
 //update task by id
 router.patch("/tasks/:id",authMiddleware, async (req, res) => {
+
+  
   const allowedUpdates = ["status"];  
   const updates = Object.keys(req.body);
 
@@ -78,10 +84,16 @@ router.patch("/tasks/:id",authMiddleware, async (req, res) => {
 
   try {
     const task = await Task.findOne({_id:req.params.id})
+    const createdBy = await User.findOne({_id:task.createdBy})
 
-    if (!task) return res.status(404).send();
+    if(!task) return res.status(404).send();
 
     task["status"]=req.body["status"]
+    
+    //notifying user 
+    sendMail(task.assignedTo,"status",req.body.status)  //notify user task assignedTo
+    sendMail(createdBy,"status",req.body.status)  //notify user task createdBy
+
     await task.save()
     
     res.status(200).send(task);
@@ -139,5 +151,40 @@ router.get("/tasks",authMiddleware, async (req, res) => {
   }
 });
 
+//notification
+const sendMail = (email, issue, value) => {
+
+  try{
+    let text, title
+    if(issue==="assigned")
+    {
+      title = "New Task Assgined"
+      text = `You have been assigned with a new Task. Please finish it before due date ${value}.`
+    } 
+    else if(issue==="status")
+    {
+      title = "Task Status Changed"
+      text = `Your task's status have been changed to ${value}`
+    }
+
+    const transporter = nodemailer.createTransport({
+
+      service: "Gmail",
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_PASS,
+      },
+    });
+      
+    transporter.sendMail({
+      from: '"Task Manager Service" <foo@example.com>',
+      to: email,
+      subject: title,
+      html: text
+    });
+  }catch(error){
+      res.status(404).send({error : "Couldnt send notification! Please try again later.."})
+  }
+};
 
 module.exports = router
